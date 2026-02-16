@@ -1,0 +1,56 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore SerialToTcp/SerialToTcp.csproj
+
+      - name: Build
+        run: dotnet build SerialToTcp/SerialToTcp.csproj -c Release --no-restore
+
+      - name: Publish (self-contained single file)
+        run: dotnet publish SerialToTcp/SerialToTcp.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SerialToTcp-win-x64
+          path: SerialToTcp/bin/Release/net8.0-windows/win-x64/publish/
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        run: iscc installer.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SerialToTcpSetup
+          path: installer/Output/SerialToTcpSetup.exe
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/Output/SerialToTcpSetup.exe
+          generate_release_notes: true
