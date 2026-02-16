@@ -13,6 +13,7 @@
     <Description>Serial port to TCP bridge</Description>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
@@ -23,7 +24,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="logo.png" />
-    <Content Include="app.ico" />
+    <Content Include="app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

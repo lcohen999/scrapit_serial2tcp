@@ -179,10 +179,11 @@ namespace SerialToTcp
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.Sizable;
 
-            // Try to load app icon
+            // Load app icon from exe directory
             try
             {
-                var icoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
+                var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? "";
+                var icoPath = Path.Combine(exeDir, "app.ico");
                 if (File.Exists(icoPath))
                     Icon = new Icon(icoPath);
             }
@@ -199,13 +200,19 @@ namespace SerialToTcp
                 BackColor = Color.Transparent
             };
 
-            // Load embedded logo
+            // Load embedded logo (must copy stream - Image requires it to stay open)
             try
             {
                 var assembly = Assembly.GetExecutingAssembly();
-                using var stream = assembly.GetManifestResourceStream("SerialToTcp.logo.png");
+                var stream = assembly.GetManifestResourceStream("SerialToTcp.logo.png");
                 if (stream != null)
-                    picLogo.Image = Image.FromStream(stream);
+                {
+                    var ms = new MemoryStream();
+                    stream.CopyTo(ms);
+                    stream.Dispose();
+                    ms.Position = 0;
+                    picLogo.Image = Image.FromStream(ms);
+                }
             }
             catch { }
 
@@ -322,7 +329,8 @@ namespace SerialToTcp
             // Use app icon for tray
             try
             {
-                var icoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
+                var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? "";
+                var icoPath = Path.Combine(exeDir, "app.ico");
                 if (File.Exists(icoPath))
                     trayIcon.Icon = new Icon(icoPath);
                 else
