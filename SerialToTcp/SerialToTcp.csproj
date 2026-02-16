@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Nullable>enable</Nullable>
     <AssemblyName>SerialToTcp</AssemblyName>
     <RootNamespace>SerialToTcp</RootNamespace>
     <Version>1.0.0</Version>
