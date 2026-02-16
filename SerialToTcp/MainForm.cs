@@ -9,20 +9,20 @@ namespace SerialToTcp
 {
     public class MainForm : Form
     {
-        private ComboBox cmbComPort;
-        private ComboBox cmbBaudRate;
-        private TextBox txtTcpPort;
-        private Button btnAdd;
-        private Button btnRemove;
-        private Button btnStartAll;
-        private Button btnStopAll;
-        private Button btnRefreshPorts;
-        private ListView lvMappings;
-        private TextBox txtLog;
-        private NotifyIcon trayIcon;
-        private ContextMenuStrip trayMenu;
+        private ComboBox cmbComPort = null!;
+        private ComboBox cmbBaudRate = null!;
+        private TextBox txtTcpPort = null!;
+        private Button btnAdd = null!;
+        private Button btnRemove = null!;
+        private Button btnStartAll = null!;
+        private Button btnStopAll = null!;
+        private Button btnRefreshPorts = null!;
+        private ListView lvMappings = null!;
+        private TextBox txtLog = null!;
+        private NotifyIcon trayIcon = null!;
+        private ContextMenuStrip trayMenu = null!;
 
-        private AppSettings _settings;
+        private AppSettings _settings = null!;
         private readonly List<SerialTcpBridge> _bridges = new();
 
         public MainForm()

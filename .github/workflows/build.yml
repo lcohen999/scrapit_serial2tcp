@@ -29,23 +29,25 @@ jobs:
       - name: Publish (self-contained single file)
         run: dotnet publish SerialToTcp/SerialToTcp.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SerialToTcp-win-x64
-          path: SerialToTcp/bin/Release/net8.0-windows/win-x64/publish/
-
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
       - name: Build installer
         run: iscc installer.iss
 
-      - name: Upload installer artifact
+      - name: Upload installer
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: SerialToTcpSetup
           path: installer/Output/SerialToTcpSetup.exe
+
+      - name: Upload standalone exe
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: SerialToTcp-win-x64
+          path: SerialToTcp/bin/Release/net8.0-windows/win-x64/publish/
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
