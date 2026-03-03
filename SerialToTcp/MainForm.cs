@@ -163,8 +163,8 @@ namespace SerialToTcp
 
         public MainForm()
         {
-            InitializeComponent();
             _settings = AppSettings.Load();
+            InitializeComponent();
             LoadMappings();
 
             if (_settings.AutoStart)
