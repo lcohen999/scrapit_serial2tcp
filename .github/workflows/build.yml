@@ -58,4 +58,5 @@ jobs:
         with:
           files: |
             installer/Output/SerialToTcpSetup.exe
+            SerialToTcp/bin/Release/net8.0-windows/win-x64/publish/SerialToTcp.exe
           generate_release_notes: true

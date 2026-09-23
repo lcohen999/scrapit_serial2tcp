@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace SerialToTcp
 {
@@ -159,16 +160,60 @@ namespace SerialToTcp
         private Timer updateTimer = null!;
 
         private AppSettings _settings = null!;
-        private readonly List<SerialTcpBridge> _bridges = new();
+        private readonly string? _settingsWarning;
+        private readonly Dictionary<PortMapping, SerialTcpBridge> _bridges = new();
+        // Full explanation of the last start failure per mapping, shown on double-click / tooltip.
+        private readonly Dictionary<PortMapping, string> _errors = new();
+        // Short reason of the last failure, so background retries only report when something changes.
+        private readonly Dictionary<PortMapping, string> _errorReasons = new();
+
+        // Failed or faulted ports are retried on this interval until Stop All is clicked.
+        private const int RetrySeconds = 15;
+        private Timer retryTimer = null!;
+        private bool _wantRunning;
+        private bool _starting;
+
+        private const int ColStatus = 3;
+        private const int ColClients = 4;
+        private bool _trayHintShown;
 
         public MainForm()
         {
-            _settings = AppSettings.Load();
+            _settings = AppSettings.Load(out _settingsWarning);
             InitializeComponent();
             LoadMappings();
+        }
+
+        // Auto-start happens here rather than in the constructor: the window handle must exist before
+        // bridges can marshal log messages onto the UI thread.
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            Log($"Settings file: {AppSettings.SettingsPath}");
+            if (_settingsWarning != null) Log(_settingsWarning);
+
+            if (_settings.StartMinimized)
+                WindowState = FormWindowState.Minimized;
 
             if (_settings.AutoStart)
-                StartAll();
+                StartAll(interactive: false);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            // Another launch of the exe asked us to come forward (see Program.Main).
+            if (m.Msg == Program.WM_SHOWME)
+            {
+                ShowFromTray();
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        private void SaveSettings()
+        {
+            if (!_settings.Save(out var error))
+                Log(error!);
         }
 
         private void InitializeComponent()
@@ -179,15 +224,7 @@ namespace SerialToTcp
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.Sizable;
 
-            // Load app icon from exe directory
-            try
-            {
-                var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? "";
-                var icoPath = Path.Combine(exeDir, "app.ico");
-                if (File.Exists(icoPath))
-                    Icon = new Icon(icoPath);
-            }
-            catch { }
+            Icon = LoadAppIcon(null); // all frames, so Windows picks the right size for title bar and taskbar
 
             // --- Header panel with logo ---
             var panelHeader = new Panel { Dock = DockStyle.Top, Height = 60, BackColor = Color.White };
@@ -260,17 +297,22 @@ namespace SerialToTcp
             btnRemove.Click += BtnRemove_Click;
 
             btnStartAll = new Button { Text = "Start All", Location = new Point(250, 42), Width = 90, Height = 26, BackColor = Color.FromArgb(200, 240, 200) };
-            btnStartAll.Click += (s, e) => StartAll();
+            btnStartAll.Click += (s, e) => StartAll(interactive: true);
 
             btnStopAll = new Button { Text = "Stop All", Location = new Point(350, 42), Width = 90, Height = 26, BackColor = Color.FromArgb(240, 200, 200) };
             btnStopAll.Click += (s, e) => StopAll();
 
             var chkAutoStart = new CheckBox { Text = "Auto-start", Location = new Point(460, 44), AutoSize = true };
-            chkAutoStart.CheckedChanged += (s, e) => { _settings.AutoStart = chkAutoStart.Checked; _settings.Save(); };
+            chkAutoStart.Checked = _settings.AutoStart;
+            chkAutoStart.CheckedChanged += (s, e) => { _settings.AutoStart = chkAutoStart.Checked; SaveSettings(); };
+
+            var chkStartMinimized = new CheckBox { Text = "Start in tray", Location = new Point(140, 44), AutoSize = true };
+            chkStartMinimized.Checked = _settings.StartMinimized;
+            chkStartMinimized.CheckedChanged += (s, e) => { _settings.StartMinimized = chkStartMinimized.Checked; SaveSettings(); };
 
             panelTop.Controls.AddRange(new Control[] {
                 lblCom, cmbComPort, btnRefreshPorts, lblBaud, cmbBaudRate,
-                lblTcp, txtTcpPort, btnAdd, btnRemove, btnStartAll, btnStopAll, chkAutoStart
+                lblTcp, txtTcpPort, btnAdd, btnRemove, chkStartMinimized, btnStartAll, btnStopAll, chkAutoStart
             });
 
             // --- Mappings list ---
@@ -280,12 +322,14 @@ namespace SerialToTcp
                 Height = 140,
                 View = View.Details,
                 FullRowSelect = true,
-                GridLines = true
+                GridLines = true,
+                ShowItemToolTips = true
             };
+            lvMappings.DoubleClick += (s, e) => ShowSelectedError();
             lvMappings.Columns.Add("COM Port", 100);
             lvMappings.Columns.Add("Baud Rate", 80);
             lvMappings.Columns.Add("TCP Port", 80);
-            lvMappings.Columns.Add("Status", 100);
+            lvMappings.Columns.Add("Status", 120);
             lvMappings.Columns.Add("Clients", 70);
 
             // --- Splitter ---
@@ -314,7 +358,7 @@ namespace SerialToTcp
             // --- System tray ---
             trayMenu = new ContextMenuStrip();
             trayMenu.Items.Add("Show", null, (s, e) => ShowFromTray());
-            trayMenu.Items.Add("Start All", null, (s, e) => StartAll());
+            trayMenu.Items.Add("Start All", null, (s, e) => StartAll(interactive: false));
             trayMenu.Items.Add("Stop All", null, (s, e) => StopAll());
             trayMenu.Items.Add("-");
             trayMenu.Items.Add("Exit", null, (s, e) => ExitApp());
@@ -326,17 +370,8 @@ namespace SerialToTcp
                 Visible = false
             };
 
-            // Use app icon for tray
-            try
-            {
-                var exeDir = Path.GetDirectoryName(Application.ExecutablePath) ?? "";
-                var icoPath = Path.Combine(exeDir, "app.ico");
-                if (File.Exists(icoPath))
-                    trayIcon.Icon = new Icon(icoPath);
-                else
-                    trayIcon.Icon = SystemIcons.Application;
-            }
-            catch { trayIcon.Icon = SystemIcons.Application; }
+            // The tray wants the 16px frame; letting Windows shrink the 256px one looks blurry.
+            trayIcon.Icon = LoadAppIcon(SystemInformation.SmallIconSize);
 
             trayIcon.DoubleClick += (s, e) => ShowFromTray();
 
@@ -345,8 +380,24 @@ namespace SerialToTcp
             updateTimer.Tick += (s, e) => UpdateStatus();
             updateTimer.Start();
 
+            retryTimer = new Timer { Interval = RetrySeconds * 1000 };
+            retryTimer.Tick += (s, e) => { if (_wantRunning) StartAll(interactive: false, isRetry: true); };
+
             RefreshComPorts();
-            chkAutoStart.Checked = _settings.AutoStart;
+        }
+
+        // app.ico is embedded in the exe. It used to be loaded from the exe's folder, but the single-file
+        // publish bundles it inside the exe, so it was never there and the tray fell back to the generic icon.
+        private static Icon LoadAppIcon(Size? size)
+        {
+            try
+            {
+                using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("SerialToTcp.app.ico");
+                if (stream != null)
+                    return size is Size sz ? new Icon(stream, sz) : new Icon(stream);
+            }
+            catch { }
+            return SystemIcons.Application;
         }
 
         private void RefreshComPorts()
@@ -362,17 +413,15 @@ namespace SerialToTcp
         {
             lvMappings.Items.Clear();
             foreach (var m in _settings.Mappings)
-            {
-                var item = new ListViewItem(new[] { m.ComPort, m.BaudRate.ToString(), m.TcpPort.ToString(), "Stopped", "0" });
-                lvMappings.Items.Add(item);
-            }
+                lvMappings.Items.Add(new ListViewItem(new[] { m.ComPort, m.BaudRate.ToString(), m.TcpPort.ToString(), "Stopped", "0" }));
         }
 
         private void BtnAdd_Click(object? sender, EventArgs e)
         {
             if (cmbComPort.SelectedItem == null)
             {
-                MessageBox.Show("Select a COM port.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Select a COM port. If the list is empty, Windows doesn't see any serial ports — " +
+                    "plug in the adapter and click ↻.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -385,83 +434,186 @@ namespace SerialToTcp
             var comPort = cmbComPort.SelectedItem.ToString()!;
             var baudRate = int.Parse(cmbBaudRate.SelectedItem?.ToString() ?? "9600");
 
-            if (_settings.Mappings.Any(m => m.ComPort == comPort || m.TcpPort == tcpPort))
+            var clash = _settings.Mappings.FirstOrDefault(m =>
+                string.Equals(m.ComPort, comPort, StringComparison.OrdinalIgnoreCase) || m.TcpPort == tcpPort);
+            if (clash != null)
             {
-                MessageBox.Show("COM port or TCP port already in use.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show($"There is already a mapping {clash.ComPort} <-> TCP:{clash.TcpPort}. " +
+                    "Each COM port and each TCP port can only be used once.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             var mapping = new PortMapping { ComPort = comPort, BaudRate = baudRate, TcpPort = tcpPort };
             _settings.Mappings.Add(mapping);
-            _settings.Save();
+            SaveSettings();
 
-            var item = new ListViewItem(new[] { comPort, baudRate.ToString(), tcpPort.ToString(), "Stopped", "0" });
-            lvMappings.Items.Add(item);
+            lvMappings.Items.Add(new ListViewItem(new[] { comPort, baudRate.ToString(), tcpPort.ToString(), "Stopped", "0" }));
 
-            txtTcpPort.Text = (tcpPort + 1).ToString();
+            if (tcpPort < 65535) txtTcpPort.Text = (tcpPort + 1).ToString();
             Log($"Added mapping: {comPort} @ {baudRate} <-> TCP:{tcpPort}");
         }
 
         private void BtnRemove_Click(object? sender, EventArgs e)
         {
-            if (lvMappings.SelectedItems.Count == 0) return;
+            if (lvMappings.SelectedIndices.Count == 0) return;
 
             var idx = lvMappings.SelectedIndices[0];
             var mapping = _settings.Mappings[idx];
 
-            var bridge = _bridges.FirstOrDefault(b => b.ComPort == mapping.ComPort && b.TcpPort == mapping.TcpPort);
-            if (bridge != null)
-            {
-                bridge.Stop();
+            if (_bridges.Remove(mapping, out var bridge))
                 bridge.Dispose();
-                _bridges.Remove(bridge);
-            }
+            _errors.Remove(mapping);
+            _errorReasons.Remove(mapping);
 
             _settings.Mappings.RemoveAt(idx);
-            _settings.Save();
+            SaveSettings();
             lvMappings.Items.RemoveAt(idx);
 
             Log($"Removed mapping: {mapping.ComPort} <-> TCP:{mapping.TcpPort}");
         }
 
-        private void StartAll()
+        /// <param name="interactive">True when the user clicked the button: failures are also shown in a dialog.</param>
+        /// <param name="isRetry">True for the background retry timer: only report failures whose reason changed.</param>
+        private async void StartAll(bool interactive, bool isRetry = false)
         {
-            for (int i = 0; i < _settings.Mappings.Count; i++)
+            if (_starting) return;
+            _starting = true;
+            _wantRunning = true;
+            retryTimer.Start();
+            try
             {
-                var m = _settings.Mappings[i];
-                if (_bridges.Any(b => b.ComPort == m.ComPort && b.IsRunning))
-                    continue;
+                // Failures that are new (or changed reason) since the last attempt; only these get logged/announced.
+                var newFailures = new List<(PortMapping Mapping, BridgeStartException Error)>();
 
-                try
+                for (int i = 0; i < _settings.Mappings.Count; i++)
                 {
+                    var m = _settings.Mappings[i];
+                    var item = lvMappings.Items[i];
+
+                    if (_bridges.TryGetValue(m, out var existing))
+                    {
+                        if (existing.IsRunning && existing.Fault == null)
+                            continue;
+                        // Faulted (e.g. adapter was unplugged): tear it down and reopen.
+                        existing.Dispose();
+                        _bridges.Remove(m);
+                    }
+
                     var bridge = new SerialTcpBridge(m.ComPort, m.BaudRate, m.TcpPort);
-                    bridge.OnLog += msg => BeginInvoke(() => Log(msg));
-                    bridge.Start();
-                    _bridges.Add(bridge);
-                    lvMappings.Items[i].SubItems[3].Text = "Running";
+                    bridge.OnLog += Log;
+                    try
+                    {
+                        bridge.Start();
+                        _bridges[m] = bridge;
+                        _errors.Remove(m);
+                        _errorReasons.Remove(m);
+                        SetStatus(item, "Running", null);
+                    }
+                    catch (BridgeStartException ex)
+                    {
+                        bridge.Dispose();
+                        bool changed = !isRetry || !_errorReasons.TryGetValue(m, out var prev) || prev != ex.ShortReason;
+                        _errorReasons[m] = ex.ShortReason;
+                        if (changed)
+                        {
+                            _errors[m] = ex.Message;
+                            Log($"Could not start {m.ComPort} <-> TCP:{m.TcpPort}: {ex.Message}");
+                            Log($"    (Windows error: {ex.InnerException?.GetType().Name}: {ex.InnerException?.Message})");
+                            newFailures.Add((m, ex));
+                        }
+                        SetStatus(item, $"{ex.ShortReason} (retrying)", _errors[m]);
+                    }
                 }
-                catch (Exception ex)
+
+                if (newFailures.Count == 0) return;
+
+                await IdentifyPortHolders(newFailures
+                    .Where(f => f.Error.InnerException is UnauthorizedAccessException)
+                    .Select(f => f.Mapping).ToList());
+
+                if (!_wantRunning) return; // Stop All was clicked while we were looking
+
+                var still = newFailures.Where(f => _errors.ContainsKey(f.Mapping)).ToList();
+                if (still.Count == 0) return;
+
+                if (interactive)
                 {
-                    lvMappings.Items[i].SubItems[3].Text = "Error";
-                    Log($"Error starting {m.ComPort}: {ex.Message}");
+                    var text = string.Join("\r\n\r\n", still.Select(f =>
+                        $"{f.Mapping.ComPort} <-> TCP:{f.Mapping.TcpPort}\r\n{_errors[f.Mapping]}"));
+                    MessageBox.Show(text + $"\r\n\r\nThese will be retried automatically every {RetrySeconds} seconds.",
+                        "Some ports could not be started", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
+                else if (trayIcon.Visible || !Visible || WindowState == FormWindowState.Minimized)
+                {
+                    trayIcon.Visible = true;
+                    trayIcon.ShowBalloonTip(5000, "Serial-to-TCP Bridge",
+                        $"{still.Count} port(s) could not be started — retrying every {RetrySeconds}s. Open the window for details.",
+                        ToolTipIcon.Warning);
+                }
+            }
+            finally
+            {
+                _starting = false;
+            }
+        }
+
+        /// <summary>For ports that failed with "access denied", find out which program has them open.</summary>
+        private async Task IdentifyPortHolders(List<PortMapping> mappings)
+        {
+            if (mappings.Count == 0) return;
+
+            var ports = mappings.Select(m => m.ComPort).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            Log($"Looking for the program that has {string.Join(", ", ports)} open...");
+            var result = await PortHolderFinder.FindAsync(ports, TimeSpan.FromSeconds(20));
+
+            foreach (var m in mappings)
+            {
+                // Skip mappings that were removed, started, or stopped while the scan ran.
+                int idx = _settings.Mappings.IndexOf(m);
+                if (idx < 0 || !_errors.TryGetValue(m, out var detail)) continue;
+
+                var who = PortHolderFinder.Explain(result, m.ComPort);
+                Log(who);
+                _errors[m] = who + "\r\n\r\n" + detail;
+                lvMappings.Items[idx].ToolTipText = _errors[m];
             }
         }
 
         private void StopAll()
         {
-            foreach (var bridge in _bridges)
-            {
-                bridge.Stop();
-                bridge.Dispose();
-            }
-            _bridges.Clear();
+            _wantRunning = false;
+            retryTimer.Stop();
 
-            for (int i = 0; i < lvMappings.Items.Count; i++)
+            foreach (var bridge in _bridges.Values)
+                bridge.Dispose();
+            _bridges.Clear();
+            _errors.Clear();
+            _errorReasons.Clear();
+
+            foreach (ListViewItem item in lvMappings.Items)
             {
-                lvMappings.Items[i].SubItems[3].Text = "Stopped";
-                lvMappings.Items[i].SubItems[4].Text = "0";
+                SetStatus(item, "Stopped", null);
+                item.SubItems[ColClients].Text = "0";
             }
+        }
+
+        private static void SetStatus(ListViewItem item, string status, string? tooltip)
+        {
+            item.SubItems[ColStatus].Text = status;
+            item.ToolTipText = tooltip ?? "";
+            item.ForeColor = status == "Running" || status == "Stopped" ? SystemColors.WindowText : Color.Firebrick;
+        }
+
+        private void ShowSelectedError()
+        {
+            if (lvMappings.SelectedIndices.Count == 0) return;
+            var m = _settings.Mappings[lvMappings.SelectedIndices[0]];
+
+            string? detail = _errors.TryGetValue(m, out var err) ? err
+                           : _bridges.TryGetValue(m, out var b) && b.Fault != null ? $"{m.ComPort} {b.Fault}. Reconnecting automatically every {RetrySeconds} seconds."
+                           : null;
+            if (detail != null)
+                MessageBox.Show(detail, $"{m.ComPort} <-> TCP:{m.TcpPort}", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private void UpdateStatus()
@@ -472,14 +624,19 @@ namespace SerialToTcp
             for (int i = 0; i < _settings.Mappings.Count && i < lvMappings.Items.Count; i++)
             {
                 var m = _settings.Mappings[i];
-                var bridge = _bridges.FirstOrDefault(b => b.ComPort == m.ComPort && b.TcpPort == m.TcpPort);
-                if (bridge != null)
+                if (!_bridges.TryGetValue(m, out var bridge)) continue;
+
+                var item = lvMappings.Items[i];
+                int cc = bridge.ClientCount;
+                totalClients += cc;
+                item.SubItems[ColClients].Text = cc.ToString();
+
+                if (bridge.Fault != null)
+                    SetStatus(item, "Faulted (retrying)", $"{m.ComPort} {bridge.Fault}. Reconnecting automatically every {RetrySeconds} seconds.");
+                else if (bridge.IsRunning)
                 {
-                    int cc = bridge.ClientCount;
-                    totalClients += cc;
-                    lvMappings.Items[i].SubItems[4].Text = cc.ToString();
-                    lvMappings.Items[i].SubItems[3].Text = bridge.IsRunning ? "Running" : "Stopped";
-                    if (bridge.IsRunning) anyRunning = true;
+                    SetStatus(item, "Running", null);
+                    anyRunning = true;
                 }
             }
 
@@ -487,11 +644,13 @@ namespace SerialToTcp
             dataFlowPanel.ClientCount = totalClients;
         }
 
+        // Safe to call from any thread (bridges log from socket and serial threads).
         private void Log(string message)
         {
+            if (IsDisposed || Disposing) return;
             if (InvokeRequired)
             {
-                BeginInvoke(() => Log(message));
+                try { BeginInvoke(() => Log(message)); } catch (InvalidOperationException) { }
                 return;
             }
 
@@ -502,6 +661,7 @@ namespace SerialToTcp
             {
                 txtLog.Text = txtLog.Text.Substring(txtLog.TextLength - 30000);
                 txtLog.SelectionStart = txtLog.TextLength;
+                txtLog.ScrollToCaret();
             }
         }
 
@@ -512,7 +672,11 @@ namespace SerialToTcp
             {
                 Hide();
                 trayIcon.Visible = true;
-                trayIcon.ShowBalloonTip(1000, "ScrapIt Serial-to-TCP Bridge", "Running in background. Double-click to restore.", ToolTipIcon.Info);
+                if (!_trayHintShown)
+                {
+                    _trayHintShown = true;
+                    trayIcon.ShowBalloonTip(1000, "ScrapIt Serial-to-TCP Bridge", "Running in background. Double-click to restore.", ToolTipIcon.Info);
+                }
             }
         }
 
@@ -521,7 +685,7 @@ namespace SerialToTcp
             Show();
             WindowState = FormWindowState.Normal;
             trayIcon.Visible = false;
-            BringToFront();
+            Activate();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -547,8 +711,11 @@ namespace SerialToTcp
         {
             if (disposing)
             {
-                StopAll();
+                foreach (var bridge in _bridges.Values)
+                    bridge.Dispose();
+                _bridges.Clear();
                 updateTimer?.Dispose();
+                retryTimer?.Dispose();
                 trayIcon?.Dispose();
                 trayMenu?.Dispose();
             }

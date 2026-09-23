@@ -8,7 +8,7 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <AssemblyName>SerialToTcp</AssemblyName>
     <RootNamespace>SerialToTcp</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.2.0</Version>
     <Authors>ScrapIt Software</Authors>
     <Description>Serial port to TCP bridge</Description>
     <PublishSingleFile>true</PublishSingleFile>
@@ -24,9 +24,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="logo.png" />
-    <Content Include="app.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <EmbeddedResource Include="app.ico" />
   </ItemGroup>
 
 </Project>
