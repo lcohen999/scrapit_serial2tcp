@@ -8,7 +8,7 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <AssemblyName>SerialToTcp</AssemblyName>
     <RootNamespace>SerialToTcp</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <Authors>ScrapIt Software</Authors>
     <Description>Serial port to TCP bridge</Description>
     <PublishSingleFile>true</PublishSingleFile>

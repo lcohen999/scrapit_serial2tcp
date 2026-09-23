@@ -222,7 +222,7 @@ namespace SerialToTcp
             }
         }
 
-        private static string? QueryDosDevice(string comPort)
+        internal static string? QueryDosDevice(string comPort)
         {
             var sb = new StringBuilder(1024);
             if (QueryDosDeviceW(comPort, sb, sb.Capacity) == 0) return null;

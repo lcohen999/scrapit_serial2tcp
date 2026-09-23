@@ -30,6 +30,7 @@ If a port fails to start, its Status column shows the reason. Hover over the row
 |---|---|
 | COM in use | Windows reported "Access to the port is denied". This means another program already has the port open, not a permissions problem. Close the other program (terminal software, vendor utility, another copy of this bridge in a different user session) or unplug and replug the USB adapter. |
 | COM missing | The port doesn't exist right now. The adapter may be unplugged or renumbered (check Device Manager > Ports). |
+| COM not found | Error 0x80070002. Windows lists the port, but no device answers on it. Usually a Bluetooth port with the device off, a leftover COM number from a USB adapter that was moved or removed, or virtual COM software that isn't running. Check Device Manager > View > Show hidden devices > Ports: greyed-out entries are leftovers. |
 | TCP port in use | Another program is listening on that TCP port (`netstat -ano \| findstr :4001`). |
 | TCP port reserved | Hyper-V/WSL/Docker reserved the port (`netsh int ipv4 show excludedportrange protocol=tcp`). |
 | Faulted | The device failed after starting (usually unplugged). Click **Start All** to reconnect. |

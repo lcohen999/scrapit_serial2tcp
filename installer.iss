@@ -1,6 +1,6 @@
 [Setup]
 AppName=ScrapIt Serial-to-TCP Bridge
-AppVersion=1.2.0
+AppVersion=1.2.1
 AppPublisher=ScrapIt Software
 DefaultDirName={autopf}\SerialToTcp
 DefaultGroupName=ScrapIt Serial-to-TCP
